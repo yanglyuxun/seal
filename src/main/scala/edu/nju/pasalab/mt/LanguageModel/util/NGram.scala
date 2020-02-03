@@ -21,6 +21,7 @@ object NGram {
    * @return    n-gram
    */
   def get_NGram(data : RDD[String], n : Int ): RDD[(String, Int)] = {
+    // 取出所有n-gram, 然后合并为count输出
     val result = data.mapPartitions(part => {
       part.map(elem => {
         val split = elem.split(" ")
@@ -40,12 +41,12 @@ object NGram {
         arr
       })
     }).flatMap(x => x).reduceByKey(_+_)
-
     result
   }
 
   def getGrams(trainData : RDD[String], N : Int): Array[RDD[(String, Int)]] = {
-    val grams = new Array[RDD[(String, Int)]](N)
+    // [1-gram, 2-gram, ... , N-gram] 注意每一个元素都是count
+    val grams = new Array[RDD[(String, Int)]](N) //
     for (i <- 0 until N) {
       grams(i) = get_NGram(trainData, i+1)
     }
@@ -53,9 +54,11 @@ object NGram {
   }
 
   def getCount(grams :Array[RDD[(String, Int)]], N: Int):Array[Long] = {
+    // 每种gram的总数
     val arr = new Array[Long](N)
     for (i <- 0 until N) {
-      arr(i) = grams(i).count()
+//      arr(i) = grams(i).count()
+      arr(i) = grams(i).map(_._2.toLong).reduce(_+ _)
     }
     arr
   }
@@ -69,20 +72,23 @@ object NGram {
     */
   def encodeString(sc : SparkSession, data : RDD[String], lmRootDir : String) : RDD[String] = {
     println("Build Dict & encoding line . ")
-    val sorted = data.flatMap(line => line.trim.split("\\s+"))
+    // 词频统计，降序排列
+    val sorted = data.flatMap(line => line.trim.split("\\s+")) // 分词，行转列
       .map(x => (x, 1))
-      .reduceByKey(_+_)
-      .collect().sortWith(_._2 > _._2)
+      .reduceByKey(_+_) // count
+      .collect().sortWith(_._2 > _._2) // sort desc
 
     CommonFileOperations.deleteIfExists(SntToCooc.getLMDictPath(lmRootDir))
 
+    // 编码dict
     val dict : Object2IntOpenHashMap[String] = new Object2IntOpenHashMap()
+    // hdfs存储对象，格式：词+" " + cnt
     val dictFile : PrintWriter = new PrintWriter(new BufferedWriter(
       new OutputStreamWriter(CommonFileOperations.openFileForWrite(SntToCooc.getLMDictPath(lmRootDir), true)), 129 * 1024 * 1024))
 
-    dict.put("<s>", 0)
-    dict.put("</s>", 1)
-    dict.put("unk", 2)
+    dict.put("<s>", 0) // start
+    dict.put("</s>", 1)  // end
+    dict.put("unk", 2) // unknown
 
     dictFile.println("<s> " + 0)
     dictFile.println("</s> " + 1)
@@ -96,18 +102,18 @@ object NGram {
     }
     dictFile.close()
 
+    // 广播dict
     val idBroadcast = sc.sparkContext.broadcast(dict)
-    val res = data.mapPartitions(part => {
-      val id = idBroadcast.value
+    val res = data.mapPartitions(part => { // 分区计算
+      val id = idBroadcast.value // id: Object2IntOpenHashMap[String] = dict
       part.map(elem => {
         val sb = new StringBuilder(128)
         val split = elem.trim.split("\\s+")
-        sb.append(0)
+        sb.append(0) // start
         for (elem <- split) {
           sb.append(" ").append(id.getInt(elem))
         }
-        sb.append(" ").append(1)
-
+        sb.append(" ").append(1) // end
         sb.toString()
       })
     })

@@ -37,7 +37,7 @@ class MKNSmoothing extends Serializable{
   def this(data : RDD[(Int, Int)]) {
 
     this()
-    val tmp1 = data.filter(x => x._1 == 1L).collect()
+    val tmp1 = data.filter(x => x._1 == 1L).collect() // [(1, cnt_1)] or []
     val tmp2 = data.filter(x => x._1 == 2L).collect()
     val tmp3 = data.filter(x => x._1 == 3L).collect()
     val tmp4 = data.filter(x => x._1 == 4L).collect()
@@ -46,15 +46,15 @@ class MKNSmoothing extends Serializable{
     var n3 : Double = 0.0
     var n4 : Double = 0.0
 
-    if (tmp1.length > 0) n1 = tmp1(0)._2 * 1.0 else n1 = 1.0
+    if (tmp1.length > 0) n1 = tmp1(0)._2 * 1.0 else n1 = 1.0 // cnt_1
     if (tmp2.length > 0) n2 = tmp2(0)._2 * 1.0 else n2 = 1.0
     if (tmp3.length > 0) n3 = tmp3(0)._2 * 1.0 else n3 = 1.0
     if (tmp4.length > 0) n4 = tmp4(0)._2 * 1.0 else n4 = 1.0
 
     val y = n1 / (n1 + 2 * n2)
     this.D1 = Some(1 - 2 * y * (n2 / n1))
-    this.D2 = Some(1 - 2 * y * (n3 / n2))
-    this.D3 = Some(1 - 2 * y * (n4 / n3))
+    this.D2 = Some(2 - 3 * y * (n3 / n2))
+    this.D3 = Some(3 - 4 * y * (n4 / n3))
 
 }
   /*

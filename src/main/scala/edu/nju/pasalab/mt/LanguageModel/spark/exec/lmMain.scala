@@ -51,6 +51,7 @@ object lmMain {
     val expectedErrorRate = args(5).toDouble
     val offset = args(6).toInt*/
 
+    // 将所有word替换成id
     val data = NGram.encodeString(spark,
       spark.sparkContext.textFile(ep.lmInputFile, ep.partitionNum).filter(x => x.length > 0),
       ep.lmRootDir)
@@ -59,10 +60,10 @@ object lmMain {
     sp.append("<s> ").append(x).append(" </s>")
     sp.toString()
   })*/
-
+    // 求出 1-gram - N-gram的count，存储
     val grams = NGram.getGrams(data, ep.N).map(_.persist(StorageLevel.MEMORY_ONLY))
+    // 求出 每种n-gram内的count和
     val count = NGram.getCount(grams, ep.N)
-
     for (elem <- count)
       print(elem + "\t")
     println()
@@ -74,13 +75,13 @@ object lmMain {
     val indexing = Indexing.createIndex(data, ep.N)
     indexing.foreach(_.persist())*/
 
-    if (ep.GT) GTMain.run(spark, grams, ep)
+    if (ep.GT) GTMain.run(spark, grams, ep) // Good Turing (GT)
 
-    if (ep.GSB) GSBMain.run(spark, grams, count, ep)
+    if (ep.GSB) GSBMain.run(spark, grams, count, ep)  // Google StupidbackOff(GSB)
 
-    if (ep.KN) KNMain.run(spark, grams, count, ep)
+    if (ep.KN) KNMain.run(spark, grams, count, ep) //Kneser-Ney (KN)
 
-    if (ep.MKN) MKNMain.run(spark, grams, count, ep)
+    if (ep.MKN) MKNMain.run(spark, grams, count, ep) // Modified Kneser-Ney (MKN)
 
     grams.map(_.unpersist())
     spark.stop()

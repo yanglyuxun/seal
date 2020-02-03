@@ -55,48 +55,51 @@ class MKNModel extends Serializable{
     * @param ep parameters
     */
   def compute (sc : SparkSession, grams : Array[RDD[(String, Int)]], count : Array[Long], ep : ExtractionParameters): Unit = {
+    // grams: [1-gram, ... , n-gram]，每个gram是[(gram1, cnt1),(gram2,cnt2),...]
+    // count: [sum(cnt) of 1-gram, ..., sum(cnt) of n-gram]
     CommonFileOperations.deleteIfExists(ep.lmRootDir + "/mkn")
     val dictFile = sc.sparkContext.textFile(SntToCooc.getLMDictPath(ep.lmRootDir)).filter(_.length > 0).map(line => {
       val sp = line.trim.split("\\s+")
       (sp(0), sp(1).toInt)
-    })
+    }) // [(word, id), ...]
     val dict : Int2ObjectOpenHashMap[String] = new Int2ObjectOpenHashMap[String]
     for (elem <- dictFile.collect()) {
       dict.put(elem._2, elem._1)
     }
-    val idBroad = sc.sparkContext.broadcast(dict)
-    val D = getDArray(grams, ep.N)
+    val idBroad = sc.sparkContext.broadcast(dict) // {id:word, ...}
+    val D = getDArray(grams, ep.N) // D(n)(k): n is as n-gram, k is 1,2 or 3 (the value of the cnt)
 
     var pre_gram = grams(0).mapPartitions(part => {
       part.map(elem =>{
         (elem._1, Divide(elem._2, count(0)))
       })
-    })
+    }) // [(gram, cnt/sum(cnt)), ...] from 1-gram
 
-    for (i <- 1 until ep.N) {
+    for (i <- 1 until ep.N) { // 2-gram, 3-gram, ...
       val prop = simpleMap(grams(i).repartitionAndSortWithinPartitions(new gramPartitioner(ep.partitionNum)))
-        //.partitionBy(new gramPartitioner(ep.partitionNum)))
-      val part1 = getAllCounts(prop, D(i))
+        //  [(condition, (gram, cnt)), ...]
+      val part1 = getAllCounts(prop, D(i)) // [(w, u(w_n|w_1_n-1), b(w_1_n-1)), ...)]
 
       val adjusted = part1.map(elem => {
         val tmp = elem._1.trim.substring(0, elem._1.trim.lastIndexOf(" "))
-        (tmp, elem)
-      }).join(pre_gram).map(elem => {
-        val value = elem._2._1._2 + elem._2._1._3 * elem._2._2
-        (elem._2._1._1, value)
+        (tmp, elem) // (w_1_n-1, (w, u(w_n|w_1_n-1), b(w_1_n-1)))
+      }).join(pre_gram) // (w_1_n-1, ((w, u(w_n|w_1_n-1), b(w_1_n-1)), cnt/sum(cnt) ))
+      .map(elem => {
+        val value = elem._2._1._2 + elem._2._1._3 * elem._2._2 // u + b * cnt/sum(cnt)
+        (elem._2._1._1, value) // (w, p(w_n, w_1_n-1))
       })
 
       val BOW = part1.map(elem => {
-        val sp = elem._1.trim.substring(0, elem._1.trim.lastIndexOf(" "))
-        (sp, elem._3)
+        val sp = elem._1.trim.substring(0, elem._1.trim.lastIndexOf(" ")) // w_1_n-1
+        (sp, elem._3) // (w_1_n-1, b(w_1_n-1))
       }).distinct()
 
-      if (i == 1) {
+      if (i == 1) { // 2-gram
         println(i + "\t" + pre_gram.count() + "\t" + BOW.count() + "\t")
 
         val gram = pre_gram.join(BOW).mapPartitions(part => {
           val id = idBroad.value
-          part.map(elem => {
+          part.map(elem => { // (w, (cnt/sum(cnt), b(w_1_n-1))
             val sb = new StringBuilder(128)
             val tmp = elem._1.toInt
             if (tmp == 0){
@@ -109,7 +112,7 @@ class MKNModel extends Serializable{
                 sb.append(Math.log10(elem._2._2))
               }
             }
-            sb.toString()
+            sb.toString() // log10(cnt/sum(cnt))   w   log10(b(w_1_n-1))
           })
         })
         if (gram.count() == count(i-1)){
@@ -122,10 +125,12 @@ class MKNModel extends Serializable{
           ).repartition(ep.partitionNum).saveAsTextFile(SntToCooc.getMKNGramPath(ep.lmRootDir, i))
         }
 
-      } else {
+      } else { // 3-gram, ...
         BOW.repartitionAndSortWithinPartitions(new HashPartitioner(ep.partitionNum))
           //.partitionBy(new HashPartitioner(ep.partitionNum))
-        val before = pre_gram.map(_._1).subtract(BOW.map(_._1)).map(elem => (elem, 1))
+        val before = pre_gram.map(_._1) //
+          .subtract(BOW.map(_._1)) // w in 1-gram but not in BOW
+          .map(elem => (elem, 1))
           .partitionBy(new HashPartitioner(ep.partitionNum))
 
         println(i + "\t" + pre_gram.count() + "\t"  + BOW.count() + "\t res pair number : " + before.count())
@@ -186,19 +191,23 @@ class MKNModel extends Serializable{
   }
 
   def getAllCounts(data: RDD[(String, (String, Int))], D : Array[Double]): RDD[(String, Double, Double)] = {
-    val res = data.groupByKey().map(elem => {
-      val arr = elem._2.toArray
-      val sum : Long = arr.map(_._2).sum
+    // data:  [(condition, (gram, cnt)), ...]
+    // D: D(k) where k is the cnt
+    val res = data.groupByKey().map(elem => { // elem: (condition, [(gram, cnt), ...])
+      val arr = elem._2.toArray // [(gram, cnt), ...] for the same condition
+      val sum : Long = arr.map(_._2).sum // sum(cnt) for the condition
       val fresh :Array[Int] = new Array[Int](3)
-      val num = arr.map(elem => {
+      val num = arr.map(elem => { // elem: (gram, cnt)
         val sp = elem._1.trim.indexOf(" ")
-        elem._1.trim.substring(sp + 1)
-      }).distinct.map(x => (x, 1)).groupBy(x=> x._1).mapValues(elem => {
+        elem._1.trim.substring(sp + 1) // the last word of the gram
+      }) //.distinct
+      .map(x => (x, 1)).groupBy(x=> x._1) //
+      .mapValues(elem => {
         var sum = 0
         for (x <- elem)
           sum += x._2
         sum
-      })
+      }) // [(word, cnt), ...]
 
       var n1 : Int = 0
       var n2 : Int = 0
@@ -217,10 +226,10 @@ class MKNModel extends Serializable{
       fresh(1) = n2
       fresh(2) = n3
       val buffer = new ArrayBuffer[(String, Double, Double)]()
-      for (elem <- arr) {
-        buffer.append((elem._1,
-          SmoothedProbability(elem._2, sum, D),
-          getBackOffWeights(sum, fresh, D)))
+      for (elem <- arr) { // (gram, cnt)
+        buffer.append((elem._1, // gram
+          SmoothedProbability(elem._2, sum, D), // u(w_n|w_1_n-1)
+          getBackOffWeights(sum, fresh, D))) // b(w_1_n-1)
       }
       buffer.toArray[((String, Double, Double))]
     }).flatMap(x => x)
@@ -238,13 +247,17 @@ class MKNModel extends Serializable{
   def getDArray(grams :Array[RDD[(String, Int)]], N: Int) : Array[Array[Double]] = {
     val D = new Array[Array[Double]](N)
     for (i <- 0 until N) {
-      val mkn = new MKNSmoothing(grams(i).map(x => (x._2, 1)).reduceByKey(_+_))
+      val mkn = new MKNSmoothing(
+        grams(i).map(x => (x._2, 1))
+          .reduceByKey(_+_)
+      ) // [(cnt1, cnt_cnt1), ...]
       D(i) = mkn.getD
     }
     D
   }
 
   def SmoothedProbability(count : Long, prefix_count : Long,  arr: Array[Double]): Double = {
+    // cnt, sum(cnt), D
     val D = if (count == 1)
       arr(0)
     else if (count == 2)
@@ -262,6 +275,7 @@ class MKNModel extends Serializable{
   }
 
   def getBackOffWeights(count : Long, fresh : Array[Int], D : Array[Double]) : Double = {
+    // sum(cnt), fresh, D
     var molecular = 0.0
     for (i <- 0 until 3)
       molecular += D(i) * fresh(i)

@@ -17,11 +17,10 @@ object GSBMain {
     * @param ep
     */
   def run(sc : SparkSession, trainData : Array[RDD[(String, Int)]], count : Array[Long], ep: ExtractionParameters): Unit = {
-
     println("Build a SLM with Google Stupid Backoff .")
     val gsb0 = System.nanoTime()
 
-    val gsbModel = new StupidBackOffModel(sc, trainData, count, ep)
+    val gsbModel = new StupidBackOffModel(sc, trainData, count, ep)  // main function
 
     val tGSB = TimeUnit.MILLISECONDS.convert(System.nanoTime() - gsb0, TimeUnit.NANOSECONDS)
     println("Build n-gram Language Model with Google Stupid Backoff waste time " + tGSB + " ms .")
